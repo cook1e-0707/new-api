@@ -1,12 +1,15 @@
 package channel
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	common2 "one-api/common"
+	"one-api/dto"
 	"one-api/relay/common"
 	"one-api/relay/constant"
 	"one-api/relay/helper"
@@ -35,6 +38,26 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	// VERIFLOW_DEBUG: 增加并发计数器
+	currentLoad := common2.IncrementActiveRequests()
+	// 确保在函数结束时减少计数器
+	defer func() {
+		common2.DecrementActiveRequests()
+	}()
+
+	// VERIFLOW_DEBUG: 检查是否需要激活灰色逻辑
+	grayLogicActivated := false
+	if info.RelayMode == constant.RelayModeChatCompletions && common2.ShouldActivateGrayLogic() {
+		// 读取并修改请求体
+		modifiedBody, err := applyGrayLogic(c, requestBody, info, currentLoad)
+		if err != nil {
+			common2.LogError(c, "VERIFLOW_DEBUG: Failed to apply gray logic: "+err.Error())
+		} else if modifiedBody != nil {
+			requestBody = modifiedBody
+			grayLogicActivated = true
+		}
+	}
+
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
@@ -50,11 +73,78 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+
+	// VERIFLOW_DEBUG: 存储原始模型名称，用于后续的模型名称欺骗
+	if grayLogicActivated || info.RelayMode == constant.RelayModeChatCompletions {
+		c.Set("original_model_name", info.OriginModelName)
+	}
+
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
+}
+
+// VERIFLOW_DEBUG: applyGrayLogic 在高并发情况下修改请求参数
+func applyGrayLogic(c *gin.Context, requestBody io.Reader, info *common.RelayInfo, currentLoad int64) (io.Reader, error) {
+	if requestBody == nil {
+		return nil, nil
+	}
+
+	// 读取原始请求体
+	bodyBytes, err := io.ReadAll(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+
+	// 解析请求体为 OpenAI 格式
+	var chatRequest dto.GeneralOpenAIRequest
+	if err := json.Unmarshal(bodyBytes, &chatRequest); err != nil {
+		// 如果解析失败，返回原始请求体
+		return bytes.NewReader(bodyBytes), nil
+	}
+
+	// 获取灰色逻辑配置
+	grayMaxTokens, grayTemperature, _ := common2.GetGrayLogicConstants()
+
+	// 记录原始参数（用于调试）
+	originalMaxTokens := chatRequest.MaxTokens
+	originalTemperature := chatRequest.Temperature
+
+	// 应用灰色逻辑：修改参数
+	modified := false
+	if chatRequest.MaxTokens > grayMaxTokens {
+		chatRequest.MaxTokens = grayMaxTokens
+		modified = true
+	}
+	if chatRequest.MaxCompletionTokens > grayMaxTokens {
+		chatRequest.MaxCompletionTokens = grayMaxTokens
+		modified = true
+	}
+	
+	chatRequest.Temperature = grayTemperature
+	modified = true
+
+	if modified {
+		// 记录灰色逻辑激活
+		common2.LogInfo(c, fmt.Sprintf(
+			"VERIFLOW_DEBUG: Gray Logic activated. Current load: %d. Modifying request for model: %s. "+
+				"MaxTokens: %d->%d, Temperature: %f->%f",
+			currentLoad, chatRequest.Model, originalMaxTokens, chatRequest.MaxTokens, 
+			originalTemperature, chatRequest.Temperature))
+
+		// 重新序列化修改后的请求
+		modifiedBody, err := json.Marshal(chatRequest)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal modified request: %w", err)
+		}
+
+		return bytes.NewReader(modifiedBody), nil
+	}
+
+	// 如果没有修改，返回原始请求体
+	return bytes.NewReader(bodyBytes), nil
 }
 
 func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

@@ -28,13 +28,29 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
-	if !forceFormat && !thinkToContent {
+	// VERIFLOW_DEBUG: 模型名称欺骗 - 流式响应处理
+	needsModelSpoofing := false
+	originalModelName := ""
+	if originalModel, exists := c.Get("original_model_name"); exists {
+		if model, ok := originalModel.(string); ok && model != "" {
+			needsModelSpoofing = true
+			originalModelName = model
+		}
+	}
+
+	if !forceFormat && !thinkToContent && !needsModelSpoofing {
 		return helper.StringData(c, data)
 	}
 
 	var lastStreamResponse dto.ChatCompletionsStreamResponse
 	if err := common.UnmarshalJsonStr(data, &lastStreamResponse); err != nil {
-		return err
+		// 如果解析失败，直接返回原始数据
+		return helper.StringData(c, data)
+	}
+
+	// VERIFLOW_DEBUG: 应用模型名称欺骗
+	if needsModelSpoofing && lastStreamResponse.Model != "" {
+		lastStreamResponse.Model = originalModelName
 	}
 
 	if !thinkToContent {
@@ -217,6 +233,15 @@ func OpenaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		}
 	}
 
+	// VERIFLOW_DEBUG: 模型名称欺骗 - 非流式响应
+	if originalModelName, exists := c.Get("original_model_name"); exists {
+		if originalModel, ok := originalModelName.(string); ok && originalModel != "" {
+			// 将响应中的模型名称替换为用户原始请求的模型名称
+			simpleResponse.Model = originalModel
+			common.LogInfo(c, fmt.Sprintf("VERIFLOW_DEBUG: Model name spoofing applied. Response model changed to: %s", originalModel))
+		}
+	}
+
 	switch info.RelayFormat {
 	case relaycommon.RelayFormatOpenAI:
 		if forceFormat {
@@ -225,7 +250,11 @@ func OpenaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 				return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
 			}
 		} else {
-			break
+			// VERIFLOW_DEBUG: 即使不需要强制格式化，也要重新编码以应用模型名称欺骗
+			responseBody, err = common.EncodeJson(simpleResponse)
+			if err != nil {
+				return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+			}
 		}
 	case relaycommon.RelayFormatClaude:
 		claudeResp := service.ResponseOpenAI2Claude(&simpleResponse, info)
