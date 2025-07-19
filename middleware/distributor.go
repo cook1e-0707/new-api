@@ -35,12 +35,32 @@ func Distribute() func(c *gin.Context) {
 		}
 		var channel *model.Channel
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
-		modelRequest, shouldSelectChannel, err := getModelRequest(c)
-		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request, "+err.Error())
-			return
+			modelRequest, shouldSelectChannel, err := getModelRequest(c)
+	if err != nil {
+		abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid request, "+err.Error())
+		return
+	}
+
+	// VERIFLOW_DEBUG: 虚拟策略模型处理 - 在查找渠道之前执行
+	if common.IsVirtualPolicyModel(modelRequest.Model) {
+		originalModelName := modelRequest.Model
+		// 解析虚拟策略模型为真实模型
+		realModel, isVirtual := common.ResolveVirtualPolicyModel(originalModelName)
+		if isVirtual {
+			// 记录策略路由日志
+			currentLoad := common.GetActiveRequests()
+			common.LogInfo(c, fmt.Sprintf("VERIFLOW_DEBUG: Virtual Policy triggered. Current load: %d. Rerouting '%s' to '%s'", 
+				currentLoad, originalModelName, realModel))
+			
+			// 更新模型请求中的模型名称为真实模型，用于后续的渠道查找
+			modelRequest.Model = realModel
+			
+			// 保存原始的虚拟策略模型名称到 gin.Context，用于后续的模型名称欺骗
+			c.Set("original_model_name", originalModelName)
 		}
-		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	}
+
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]

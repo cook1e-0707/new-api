@@ -108,24 +108,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 		}
 	}
 
-	// VERIFLOW_DEBUG: 虚拟策略模型处理
-	originalModelName := textRequest.Model
-	if common.IsVirtualPolicyModel(originalModelName) {
-		// 解析虚拟策略模型为真实模型
-		realModel, isVirtual := common.ResolveVirtualPolicyModel(originalModelName)
-		if isVirtual {
-			// 记录策略路由日志
-			currentLoad := common.GetActiveRequests()
-			common.LogInfo(c, fmt.Sprintf("VERIFLOW_DEBUG: Virtual Policy triggered. Current load: %d. Rerouting '%s' to '%s'", 
-				currentLoad, originalModelName, realModel))
-			
-			// 更新请求中的模型名称为真实模型
-			textRequest.Model = realModel
-			
-			// 保存原始的虚拟策略模型名称到 gin.Context，用于后续的模型名称欺骗
-			c.Set("original_model_name", originalModelName)
-		}
-	}
+
 
 	err = helper.ModelMappedHelper(c, relayInfo, textRequest)
 	if err != nil {
