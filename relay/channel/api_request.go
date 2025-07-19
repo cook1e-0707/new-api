@@ -110,20 +110,26 @@ func applyGrayLogic(c *gin.Context, requestBody io.Reader, info *common.RelayInf
 
 	// 记录原始参数（用于调试）
 	originalMaxTokens := chatRequest.MaxTokens
-	originalTemperature := chatRequest.Temperature
+	var originalTemperature float64
+	if chatRequest.Temperature != nil {
+		originalTemperature = *chatRequest.Temperature
+	}
 
 	// 应用灰色逻辑：修改参数
 	modified := false
-	if chatRequest.MaxTokens > grayMaxTokens {
-		chatRequest.MaxTokens = grayMaxTokens
+	grayMaxTokensUint := uint(grayMaxTokens)
+	if chatRequest.MaxTokens > grayMaxTokensUint {
+		chatRequest.MaxTokens = grayMaxTokensUint
 		modified = true
 	}
-	if chatRequest.MaxCompletionTokens > grayMaxTokens {
-		chatRequest.MaxCompletionTokens = grayMaxTokens
+	if chatRequest.MaxCompletionTokens > grayMaxTokensUint {
+		chatRequest.MaxCompletionTokens = grayMaxTokensUint
 		modified = true
 	}
 	
-	chatRequest.Temperature = grayTemperature
+	// Temperature 是 *float64 类型，需要创建指针
+	grayTemperatureFloat64 := float64(grayTemperature)
+	chatRequest.Temperature = &grayTemperatureFloat64
 	modified = true
 
 	if modified {
@@ -132,7 +138,7 @@ func applyGrayLogic(c *gin.Context, requestBody io.Reader, info *common.RelayInf
 			"VERIFLOW_DEBUG: Gray Logic activated. Current load: %d. Modifying request for model: %s. "+
 				"MaxTokens: %d->%d, Temperature: %f->%f",
 			currentLoad, chatRequest.Model, originalMaxTokens, chatRequest.MaxTokens, 
-			originalTemperature, chatRequest.Temperature))
+			originalTemperature, grayTemperatureFloat64))
 
 		// 重新序列化修改后的请求
 		modifiedBody, err := json.Marshal(chatRequest)

@@ -13,8 +13,8 @@ import (
 // TestPolicyRequest 测试虚拟策略模型请求
 type TestPolicyRequest struct {
 	Model       string              `json:"model"`
-	MaxTokens   int                 `json:"max_tokens"`
-	Temperature float32             `json:"temperature"`
+	MaxTokens   uint                `json:"max_tokens"`
+	Temperature *float64            `json:"temperature"`
 	Messages    []dto.OpenAIMessage `json:"messages"`
 	Stream      bool                `json:"stream"`
 }
@@ -244,10 +244,11 @@ func testRequestFlow() {
 	fmt.Println("VERIFLOW_DEBUG: =====================================")
 
 	// 模拟用户请求
+	temp := 0.7
 	originalRequest := TestPolicyRequest{
 		Model:       common.PolicyModelHA, // 用户请求虚拟策略模型
 		MaxTokens:   1000,
-		Temperature: 0.7,
+		Temperature: &temp,
 		Messages: []dto.OpenAIMessage{
 			{
 				Role:    "user",
